@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FC 실적 조회 시스템</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- SheetJS (Excel 파싱용) -->
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+  <!-- Phosphor Icons -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <!-- Firebase SDK (v10 Compat) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    /* 워터마크 스타일 */
+    .watermark-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.08;
+      overflow: hidden;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-around;
+      align-content: space-around;
+      user-select: none;
+    }
+    .watermark-item {
+      transform: rotate(-25deg);
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #000;
+      padding: 30px;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans min-h-screen flex flex-col justify-between">
+
+  <!-- 워터마크 컨테이너 -->
+  <div id="watermarkContainer" class="watermark-overlay hidden"></div>
+
+  <!-- 메인 헤더 -->
+  <header class="bg-slate-900 text-white shadow-md">
+    <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <i class="ph-bold ph-trend-up text-2xl text-blue-400"></i>
+        <h1 class="text-xl font-bold tracking-tight">FC 실적 조회 시스템</h1>
+      </div>
+      <div id="headerUserNav" class="hidden flex items-center gap-4">
+        <span id="navUserBadge" class="text-xs bg-slate-800 border border-slate-700 px-3 py-1 rounded-full text-slate-300"></span>
+        <button onclick="handleLogout()" class="text-sm bg-red-600/80 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1">
+          <i class="ph ph-sign-out"></i> 로그아웃
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 1. 로그인 뷰 -->
+  <main id="loginView" class="max-w-md w-full mx-auto my-auto p-6">
+    <div class="bg-white rounded-2xl shadow-xl border border-slate-200/80 p-8">
+      <div class="text-center mb-6">
+        <div class="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-inner">
+          <i class="ph-bold ph-lock-key text-2xl"></i>
+        </div>
+        <h2 class="text-xl font-bold text-slate-900">FC 본인 인증 로그인</h2>
+        <p class="text-sm text-slate-500 mt-1">부여받으신 사번과 6자리 인증번호를 입력하세요.</p>
+      </div>
+
+      <form onsubmit="handleLogin(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">사번</label>
+          <div class="relative">
+            <i class="ph ph-user absolute left-3 top-3 text-slate-400 text-lg"></i>
+            <input type="text" id="loginEmpId" required placeholder="예: SU####" 
+                   class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none uppercase">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">인증번호 (6자리)</label>
+          <div class="relative">
+            <i class="ph ph-key absolute left-3 top-3 text-slate-400 text-lg"></i>
+            <input type="password" id="loginAuthCode" maxlength="6" required placeholder="6자리 숫자" 
+                   class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm tracking-widest focus:ring-2 focus:ring-blue-500 focus:outline-none">
+          </div>
+        </div>
+
+        <div id="loginErrorMsg" class="hidden text-xs text-red-600 bg-red-50 p-2.5 rounded-lg border border-red-200 font-medium"></div>
+
+        <button type="submit" id="loginSubmitBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-xl transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2">
+          <span>실적 확인하기</span>
+          <i class="ph-bold ph-arrow-right"></i>
+        </button>
+      </form>
+
+      <div class="mt-6 pt-5 border-t border-slate-100 text-center text-xs text-slate-400">
+        <p>🔒 본 시스템은 내부 컴플라이언스 기준에 따라<br>개인정보 및 실적 데이터를 안전하게 보호합니다.</p>
+      </div>
+    </div>
+  </main>
+
+  <!-- 2. 일반 FC: 개인 실적 뷰 -->
+  <main id="employeeView" class="hidden max-w-2xl w-full mx-auto my-auto p-6">
+    <div class="bg-white rounded-2xl shadow-xl border border-slate-200/80 overflow-hidden">
+      <div class="bg-gradient-to-r from-blue-600 to-indigo-700 p-6 text-white">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium bg-white/20 backdrop-blur-sm px-3 py-1 rounded-full text-blue-100">FC 실적 공지</span>
+          <span id="dispBaseDate" class="text-xs text-blue-100 font-medium tracking-wide">기준일자: -</span>
+        </div>
+        <h2 class="text-2xl font-bold mt-2 flex items-center gap-2">
+          <span id="dispEmpName">-</span> FC님
+        </h2>
+        <p class="text-xs text-blue-200 mt-0.5">사번: <span id="dispEmpId" class="font-mono">-</span></p>
+      </div>
+
+      <div class="p-6">
+        <div class="grid grid-cols-2 gap-4 mb-6">
+          <div class="bg-slate-50 p-5 rounded-2xl border border-slate-200">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1">추정 실적(변동가능)</span>
+            <div id="dispPerf1" class="text-2xl font-black text-slate-900">-</div>
+          </div>
+          <div class="bg-blue-50/50 p-5 rounded-2xl border border-blue-100">
+            <span class="text-xs font-semibold text-blue-600 uppercase tracking-wider block mb-1">예상 포상금(마일리지)</span>
+            <div id="dispPerf2" class="text-2xl font-black text-blue-700">-</div>
+          </div>
+        </div>
+
+        <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3 text-xs text-amber-800">
+          <i class="ph-bold ph-warning-circle text-lg text-amber-600 shrink-0"></i>
+          <div>
+            <span class="font-bold">보안 주의사항:</span>
+            본 화면의 실적 정보는 대외비 사항입니다. 화면 캡처 및 외부 유출 시 사규에 의해 제재를 받을 수 있습니다.
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 3. 관리자 뷰 -->
+  <main id="adminView" class="hidden max-w-4xl w-full mx-auto p-6 space-y-6">
+    <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="bg-purple-100 text-purple-700 text-xs px-2.5 py-0.5 rounded-full font-bold">관리자 전용</span>
+          <span id="syncModeBadge" class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800">동기화 상태 확인 중...</span>
+        </div>
+        <h2 class="text-xl font-bold text-slate-900 mt-1">데이터 관리 대시보드</h2>
+        <p class="text-xs text-slate-500 mt-0.5">웹에서 엑셀을 업로드하거나 비우면 모든 FC 화면에 실시간 반영됩니다.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="resetData()" class="text-xs bg-red-50 hover:bg-red-100 text-red-600 font-semibold px-4 py-2.5 rounded-xl transition border border-red-200 flex items-center gap-1">
+          <i class="ph ph-trash"></i> 전체 데이터 비우기
+        </button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <!-- 엑셀 업로드 1: 로그인 검증용 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-bold text-slate-800 flex items-center gap-2">
+              <i class="ph ph-shield-check text-blue-600 text-lg"></i>
+              1. 로그인 인증 데이터
+            </h3>
+            <span id="authCountBadge" class="text-xs bg-blue-50 text-blue-600 font-bold px-2 py-0.5 rounded">0건</span>
+          </div>
+          <p class="text-xs text-slate-500 mb-4 leading-relaxed">
+            사번 및 6자리 인증번호 매칭 엑셀을 업로드합니다.<br>
+            <span class="font-medium text-slate-700">컬럼 구성: [A열] 사번 | [B열] 인증번호</span>
+          </p>
+
+          <label class="block border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-xl p-4 text-center cursor-pointer bg-slate-50 hover:bg-blue-50/30 transition">
+            <i class="ph ph-upload-simple text-2xl text-slate-400 mb-1"></i>
+            <span class="block text-xs font-semibold text-slate-700">인증 엑셀 업로드 (.xlsx)</span>
+            <input type="file" id="authExcelInput" accept=".xlsx, .xls, .csv" class="hidden" onchange="handleAuthFileUpload(event)">
+          </label>
+        </div>
+
+        <div class="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between">
+          <button onclick="downloadAuthTemplate()" class="text-xs text-blue-600 hover:underline flex items-center gap-1">
+            <i class="ph ph-download-simple"></i> 양식 다운로드
+          </button>
+          <span id="authUploadStatus" class="text-xs font-medium text-emerald-600"></span>
+        </div>
+      </div>
+
+      <!-- 엑셀 업로드 2: 실적 데이터용 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-bold text-slate-800 flex items-center gap-2">
+              <i class="ph ph-chart-line-up text-emerald-600 text-lg"></i>
+              2. FC 실적 데이터
+            </h3>
+            <span id="perfCountBadge" class="text-xs bg-emerald-50 text-emerald-600 font-bold px-2 py-0.5 rounded">0건</span>
+          </div>
+          <p class="text-xs text-slate-500 mb-4 leading-relaxed">
+            원본 이름과 실적 수치가 포함된 엑셀을 업로드합니다.<br>
+            <span class="font-medium text-slate-700">컬럼: [A] 사번 | [B] 이름 | [C] 추정실적 | [D] 예상포상금 | [E] 기준일자</span>
+          </p>
+
+          <label class="block border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-xl p-4 text-center cursor-pointer bg-slate-50 hover:bg-emerald-50/30 transition">
+            <i class="ph ph-upload-simple text-2xl text-slate-400 mb-1"></i>
+            <span class="block text-xs font-semibold text-slate-700">실적 엑셀 업로드 (.xlsx)</span>
+            <input type="file" id="perfExcelInput" accept=".xlsx, .xls, .csv" class="hidden" onchange="handlePerfFileUpload(event)">
+          </label>
+        </div>
+
+        <div class="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between">
+          <button onclick="downloadPerfTemplate()" class="text-xs text-emerald-600 hover:underline flex items-center gap-1">
+            <i class="ph ph-download-simple"></i> 양식 다운로드
+          </button>
+          <span id="perfUploadStatus" class="text-xs font-medium text-emerald-600"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 데이터 미리보기 테이블 -->
+    <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+      <h3 class="font-bold text-slate-800 text-sm mb-3">현재 반영된 FC 실적 현황 (화면 마스킹 및 서식 미리보기)</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs border-collapse">
+          <thead>
+            <tr class="bg-slate-100 border-b border-slate-200 text-slate-600 font-semibold">
+              <th class="p-3">사번</th>
+              <th class="p-3">원본 이름(관리자용)</th>
+              <th class="p-3">화면 마스킹 결과</th>
+              <th class="p-3">추정 실적(변동가능)</th>
+              <th class="p-3">예상 포상금(마일리지)</th>
+              <th class="p-3">기준일자</th>
+            </tr>
+          </thead>
+          <tbody id="adminDataTableBody" class="divide-y divide-slate-100 text-slate-700">
+            <!-- JS 동적 생성 -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- 푸터 -->
+  <footer class="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-400">
+    <p>© Korea Investment & Securities FC Support Team. All rights reserved. (Internal Use Only)</p>
+  </footer>
+
+  <script>
+    /* =========================================================
+     * 1. 클라우드 DB (Firebase) 설정 (입력 완료)
+     * ========================================================= */
+    const firebaseConfig = {  
+      apiKey: "AIzaSyDwVzJUwG85wKz0tkW6lrPoTjAe0u4GFhk",  
+      authDomain: "kisfc-notice.firebaseapp.com",  
+      projectId: "kisfc-notice",  
+      storageBucket: "kisfc-notice.firebasestorage.app",  
+      messagingSenderId: "599162970538",  
+      appId: "1:599162970538:web:41dc93cff78f6ad6228bd3",  
+      measurementId: "G-78DHV5MRHJ"  
+    };
+
+    let isCloudMode = false;
+    let db = null;
+
+    try {
+      firebase.initializeApp(firebaseConfig);
+      db = firebase.firestore();
+      isCloudMode = true;
+    } catch (err) {
+      console.warn("Firebase 초기화 에러, 로컬 모드로 전환합니다:", err);
+    }
+
+    const ADMIN_ACCOUNT = { id: 'kisfc111', code: '921007' };
+    const LOCAL_AUTH_KEY = 'kisfc_cloud_auth_data';
+    const LOCAL_PERF_KEY = 'kisfc_cloud_perf_data';
+
+    let cachedAuthList = [];
+    let cachedPerfList = [];
+
+    /* =========================================================
+     * 2. 이름 자동 마스킹 및 날짜 서식
+     * ========================================================= */
+    function maskName(name) {
+      if (!name) return "";
+      const str = String(name).trim();
+      if (str.length <= 1) return str;
+      if (str.length === 2) return str[0] + "*";
+      return str[0] + "*".repeat(str.length - 2) + str[str.length - 1];
+    }
+
+    function formatExcelDate(val) {
+      if (val === undefined || val === null || val === '') return '-';
+      if (typeof val === 'number') {
+        if (window.XLSX && XLSX.SSF && XLSX.SSF.parse_date_code) {
+          const parsed = XLSX.SSF.parse_date_code(val);
+          if (parsed && parsed.y && parsed.m && parsed.d) {
+            return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
+          }
+        }
+        const epoch = new Date(1899, 11, 30);
+        const jsDate = new Date(epoch.getTime() + val * 86400000);
+        if (!isNaN(jsDate.getTime())) {
+          return `${jsDate.getFullYear()}-${String(jsDate.getMonth() + 1).padStart(2, '0')}-${String(jsDate.getDate()).padStart(2, '0')}`;
+        }
+      }
+      const strVal = String(val).trim();
+      if (/^\d{4,5}$/.test(strVal)) return formatExcelDate(Number(strVal));
+      if (/^\d{8}$/.test(strVal)) return `${strVal.substring(0, 4)}-${strVal.substring(4, 6)}-${strVal.substring(6, 8)}`;
+      const dateMatch = strVal.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+      if (dateMatch) {
+        return `${dateMatch[1]}-${String(dateMatch[2]).padStart(2, '0')}-${String(dateMatch[3]).padStart(2, '0')}`;
+      }
+      return strVal;
+    }
+
+    /* =========================================================
+     * 3. 클라우드 DB / 로컬 데이터 동기화 레이어
+     * ========================================================= */
+    async function loadAllData() {
+      if (isCloudMode && db) {
+        try {
+          const doc = await db.collection("system").doc("data").get();
+          if (doc.exists) {
+            const data = doc.data();
+            cachedAuthList = data.authList || [];
+            cachedPerfList = data.perfList || [];
+          } else {
+            cachedAuthList = [];
+            cachedPerfList = [];
+          }
+        } catch (e) {
+          console.error("클라우드 데이터 로드 오류:", e);
+        }
+      } else {
+        try {
+          cachedAuthList = JSON.parse(localStorage.getItem(LOCAL_AUTH_KEY) || '[]');
+          cachedPerfList = JSON.parse(localStorage.getItem(LOCAL_PERF_KEY) || '[]');
+        } catch (e) {
+          cachedAuthList = [];
+          cachedPerfList = [];
+        }
+      }
+    }
+
+    async function saveCloudData(newAuth, newPerf) {
+      if (newAuth !== null) cachedAuthList = newAuth;
+      if (newPerf !== null) cachedPerfList = newPerf;
+
+      if (isCloudMode && db) {
+        await db.collection("system").doc("data").set({
+          authList: cachedAuthList,
+          perfList: cachedPerfList,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } else {
+        localStorage.setItem(LOCAL_AUTH_KEY, JSON.stringify(cachedAuthList));
+        localStorage.setItem(LOCAL_PERF_KEY, JSON.stringify(cachedPerfList));
+      }
+    }
+
+    async function resetData() {
+      if (confirm("정말로 모든 FC의 로그인 및 실적 데이터를 완전히 비우시겠습니까?\n웹에 접속 중인 모든 사람에게 즉시 반영됩니다.")) {
+        await saveCloudData([], []);
+        updateAdminTable();
+        alert("데이터가 완전히 초기화되었습니다.");
+      }
+    }
+
+    /* =========================================================
+     * 4. 로그인 및 실적 화면 렌더링
+     * ========================================================= */
+    async function handleLogin(event) {
+      event.preventDefault();
+      const inputId = document.getElementById('loginEmpId').value.trim();
+      const authCode = document.getElementById('loginAuthCode').value.trim();
+      const errorEl = document.getElementById('loginErrorMsg');
+      const submitBtn = document.getElementById('loginSubmitBtn');
+      errorEl.classList.add('hidden');
+
+      // 1) 관리자 로그인
+      if (inputId.toLowerCase() === ADMIN_ACCOUNT.id.toLowerCase() && authCode === ADMIN_ACCOUNT.code) {
+        showView('admin');
+        updateAdminTable();
+        return;
+      }
+
+      // 2) 일반 FC 로그인 (클라우드 DB 실시간 검증)
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = `<span>조회 중...</span>`;
+
+      await loadAllData();
+
+      const validUser = cachedAuthList.find(u => 
+        String(u.empId).trim().toUpperCase() === inputId.toUpperCase() && 
+        String(u.authCode).trim() === authCode
+      );
+
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = `<span>실적 확인하기</span><i class="ph-bold ph-arrow-right"></i>`;
+
+      if (!validUser) {
+        errorEl.textContent = "사번 또는 인증번호가 일치하지 않습니다. (미등록 사번이거나 번호 불일치)";
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      const userPerf = cachedPerfList.find(p => 
+        String(p.empId).trim().toUpperCase() === inputId.toUpperCase()
+      );
+
+      const displayData = userPerf || {
+        empId: validUser.empId,
+        name: '미등록',
+        perf1: '등록 대기',
+        perf2: '등록 대기',
+        baseDate: '-'
+      };
+
+      renderEmployeeView(displayData);
+      showView('employee', validUser.empId);
+    }
+
+    function renderEmployeeView(perf) {
+      document.getElementById('dispEmpName').textContent = maskName(perf.name);
+      document.getElementById('dispEmpId').textContent = perf.empId;
+      document.getElementById('dispPerf1').textContent = perf.perf1 || '-';
+      document.getElementById('dispPerf2').textContent = perf.perf2 || '-';
+      document.getElementById('dispBaseDate').textContent = `기준일자: ${formatExcelDate(perf.baseDate)}`;
+    }
+
+    function handleLogout() {
+      document.getElementById('loginEmpId').value = '';
+      document.getElementById('loginAuthCode').value = '';
+      showView('login');
+    }
+
+    /* =========================================================
+     * 5. 화면 라우팅 및 워터마크
+     * ========================================================= */
+    function showView(viewType, empId = '') {
+      document.getElementById('loginView').classList.add('hidden');
+      document.getElementById('employeeView').classList.add('hidden');
+      document.getElementById('adminView').classList.add('hidden');
+      document.getElementById('headerUserNav').classList.add('hidden');
+      removeWatermark();
+
+      if (viewType === 'login') {
+        document.getElementById('loginView').classList.remove('hidden');
+      } else if (viewType === 'employee') {
+        document.getElementById('employeeView').classList.remove('hidden');
+        document.getElementById('headerUserNav').classList.remove('hidden');
+        document.getElementById('navUserBadge').textContent = `사번: ${empId}`;
+        generateWatermark(empId);
+      } else if (viewType === 'admin') {
+        document.getElementById('adminView').classList.remove('hidden');
+        document.getElementById('headerUserNav').classList.remove('hidden');
+        document.getElementById('navUserBadge').textContent = '관리자 세션';
+      }
+    }
+
+    function generateWatermark(empId) {
+      const container = document.getElementById('watermarkContainer');
+      container.innerHTML = '';
+      container.classList.remove('hidden');
+      const now = new Date();
+      const timeStr = `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,'0')}.${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+      const watermarkText = `[대외비] ${empId} / ${timeStr}`;
+
+      for (let i = 0; i < 30; i++) {
+        const item = document.createElement('div');
+        item.className = 'watermark-item';
+        item.textContent = watermarkText;
+        container.appendChild(item);
+      }
+    }
+
+    function removeWatermark() {
+      const container = document.getElementById('watermarkContainer');
+      container.classList.add('hidden');
+      container.innerHTML = '';
+    }
+
+    /* =========================================================
+     * 6. 관리자 엑셀 업로드 및 클라우드 즉시 저장
+     * ========================================================= */
+    async function handleAuthFileUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = async function(e) {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array', codepage: 949 });
+          const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+
+          if (rows.length < 2) {
+            alert("엑셀에 데이터가 없습니다.");
+            return;
+          }
+
+          const parsed = [];
+          for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row[0] === undefined || row[0] === null || String(row[0]).trim() === '') continue;
+            let code = String(row[1] !== undefined ? row[1] : '').trim();
+            if (code && /^\d+$/.test(code) && code.length < 6) code = code.padStart(6, '0');
+            parsed.push({ empId: String(row[0]).trim().toUpperCase(), authCode: code });
+          }
+
+          document.getElementById('authUploadStatus').textContent = '클라우드 저장 중...';
+          await saveCloudData(parsed, null);
+          document.getElementById('authUploadStatus').textContent = `✓ ${parsed.length}건 실시간 반영 완료`;
+          updateAdminTable();
+        } catch (err) {
+          alert("파일 처리 중 오류가 발생했습니다.");
+          console.error(err);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    async function handlePerfFileUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = async function(e) {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array', codepage: 949 });
+          const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+
+          if (rows.length < 2) {
+            alert("엑셀에 데이터가 없습니다.");
+            return;
+          }
+
+          const parsed = [];
+          for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row[0] === undefined || row[0] === null || String(row[0]).trim() === '') continue;
+            parsed.push({
+              empId: String(row[0]).trim().toUpperCase(),
+              name: String(row[1] || '').trim(),
+              perf1: String(row[2] || '-').trim(),
+              perf2: String(row[3] || '-').trim(),
+              baseDate: formatExcelDate(row[4])
+            });
+          }
+
+          document.getElementById('perfUploadStatus').textContent = '클라우드 저장 중...';
+          await saveCloudData(null, parsed);
+          document.getElementById('perfUploadStatus').textContent = `✓ ${parsed.length}건 실시간 반영 완료`;
+          updateAdminTable();
+        } catch (err) {
+          alert("파일 처리 중 오류가 발생했습니다.");
+          console.error(err);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    /* =========================================================
+     * 7. 관리자 화면 테이블 갱신 및 템플릿 다운로드
+     * ========================================================= */
+    function updateAdminTable() {
+      const badgeEl = document.getElementById('syncModeBadge');
+      if (isCloudMode) {
+        badgeEl.textContent = '🟢 실시간 클라우드 연동 중';
+        badgeEl.className = 'text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800';
+      } else {
+        badgeEl.textContent = '⚠️ 로컬 테스트 모드 (클라우드 미설정)';
+        badgeEl.className = 'text-xs px-2.5 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800';
+      }
+
+      document.getElementById('authCountBadge').textContent = `${cachedAuthList.length}건`;
+      document.getElementById('perfCountBadge').textContent = `${cachedPerfList.length}건`;
+
+      const tbody = document.getElementById('adminDataTableBody');
+      tbody.innerHTML = '';
+
+      if (cachedPerfList.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">등록된 FC 실적 데이터가 없습니다. 상단의 실적 엑셀을 업로드하세요.</td></tr>`;
+        return;
+      }
+
+      cachedPerfList.forEach(p => {
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-slate-50 border-b border-slate-100 transition";
+        tr.innerHTML = `
+          <td class="p-3 font-mono font-medium">${escapeHtml(p.empId)}</td>
+          <td class="p-3 font-medium">${escapeHtml(p.name)}</td>
+          <td class="p-3 text-blue-600 font-semibold">${escapeHtml(maskName(p.name))}</td>
+          <td class="p-3 font-semibold">${escapeHtml(p.perf1)}</td>
+          <td class="p-3 font-semibold text-emerald-600">${escapeHtml(p.perf2)}</td>
+          <td class="p-3 text-slate-500 font-mono">${escapeHtml(formatExcelDate(p.baseDate))}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    }
+
+    function downloadAuthTemplate() {
+      const sample = [
+        ["사번", "인증번호(6자리)"],
+        ["SU0006", "610421"],
+        ["SU0009", "651009"],
+        ["SU0012", "680613"]
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(sample);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "인증데이터양식");
+      XLSX.writeFile(wb, "로그인_인증데이터_양식.xlsx");
+    }
+
+    function downloadPerfTemplate() {
+      const sample = [
+        ["사번", "이름", "추정 실적(변동가능)", "예상 포상금(마일리지)", "기준일자"],
+        ["SU0006", "방환영", "₩520,000,000", "124%", "2026-11-19"],
+        ["SU0009", "홍길동", "₩310,000,000", "95%", "2026-11-19"]
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(sample);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "실적데이터양식");
+      XLSX.writeFile(wb, "FC_실적데이터_양식.xlsx");
+    }
+
+    window.addEventListener('DOMContentLoaded', async () => {
+      await loadAllData();
+      showView('login');
+    });
+  </script>
+</body>
+</html>
